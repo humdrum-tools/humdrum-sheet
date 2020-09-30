@@ -1,0 +1,26 @@
+repository: "humdrum-tools/humdrum-sheet"
+
+# the preview server used. Leave as is.
+host: 127.0.0.1
+
+# the port where the preview is rendered. 
+port: 2000
+
+# these are the files and directories that jekyll will exclude from the build
+exclude:
+  - .gitignore
+
+highlighter: rouge
+# library used for syntax highlighting
+
+# filter used to process markdown. note that kramdown differs from
+# github-flavored markdown in some subtle ways
+
+markdown: kramdown
+kramdown:
+ input: GFM
+ auto_ids: true
+ hard_wrap: false
+ syntax_highlighter: rouge
+
+

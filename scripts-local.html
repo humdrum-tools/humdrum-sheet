@@ -1,0 +1,22 @@
+<script>
+
+
+//////////////////////////////
+//
+// copyToClipboard --
+//
+
+function copyToClipboard(selector) {
+	var element = document.querySelector(selector);
+	var string = element.textContent;
+	// console.log("Copying", string, "to clipboard");
+	var element = document.createElement("textarea");
+	element.value = string;
+	document.body.appendChild(element);
+	element.select();
+	document.execCommand("copy");
+	document.body.removeChild(element);
+};
+
+
+</script>

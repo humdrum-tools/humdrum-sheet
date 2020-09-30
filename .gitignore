@@ -1,0 +1,8 @@
+_site
+.DS_Store
+*.swp
+*.bak
+js/local
+style/local
+Gemfile.lock
+.jekyll-metadata
