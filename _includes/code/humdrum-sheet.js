@@ -1,7 +1,472 @@
+//
+// Programmer:     Craig Stuart Sapp (craig@ccrma.stanford.edu)
+// Creation Date:  20 September 2020
+// Last Modified:  10 October 2020
+// URL:            http://sheet.humdrum.org/scripts/humdrum-sheet.js
+//
+// Description: Interface between Verovio Humdrum Viewer and Google
+// Spreadsheets.
+//              The doPost() function receives data (nominally from VHV, but can
+//              be from any webpage).  And doGet() will send the data as TSV
+//              content (typically after it has been edited in the spreadsheet).
+//
+// Documentation: https://doc.verovio.humdrum.org/interface/toolbar/spreadsheet
+//
+// To do: * Conditional formatting for colorizing data.  colorizeData()
+// currently does
+//          static colorizing.
+//          see:
+//          https://developers.google.com/apps-script/reference/spreadsheet/conditional-format-rule
+//
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Input/Output functions -- The doGet() function sends data and the doPost()
+//     receives data.
+//
+
+//////////////////////////////
+//
+// doGet -- send Humdrum data to a web page.
+//
+
+function doGet(e) {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let url = ss.getUrl();
+  let data = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
+                 .getValues();
+  let text = convertDataArrayToTSV(data);
+  return ContentService.createTextOutput(text);
+}
+
+
+
+//////////////////////////////
+//
+// doPost -- receive Humdrum data from a web page.
+//
+
+function doPost(e) {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let data = '';
+  if (e && e.parameter && e.parameter.humdrum) {
+    data = e.parameter.humdrum;
+  } else {
+    // Prepare a dummy score for testing:
+    data = '**kern\n*clefG2\n=1\n*^\n1c;\t1C;\n*v\t*v\n*test\n==\n*-\n';
+  }
+  fillSheetWithHumdrumData(sheet, data);
+  return ContentService.createTextOutput('FINISHED UPLOADING');
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Spreadsheet event processing
+//
+
+//////////////////////////////
+//
+// onOpen -- function to run when loading the spreadsheet.
+//
+
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('Humdrum')
+      .addItem('Escape barline rows', 'fixBarlineRows')
+      .addItem('Colorize data', 'recolorizeContents')
+      //.addSeparator()
+      .addSubMenu(
+          ui.createMenu('Add above current line')
+              .addItem('Interpretation line', 'addNullInterpretationLine')
+              .addItem('Local comment line', 'addNullCommentLine')
+              .addItem('Data line', 'addNullDataLine'))
+      .addSubMenu(
+          ui.createMenu('Show/hide columns')
+              .addItem('Hide non-kern spines', 'hideNonKernSpines')
+              .addItem('Show only selected spines', 'showOnlySelectedSpines')
+              .addItem('Hide selected spines', 'hideSelectedSpines')
+              .addItem('Show all spines', 'showAllSpines'))
+      .addToUi();
+}
+
+
+
+//////////////////////////////
+//
+// onEdit -- function to run when the spreadsheet changes.
+//
+// Example event:
+//
+//  {
+//    "source": {},
+//    "authMode": "LIMITED",
+//    "oldValue": "!!!final: GGG",
+//    "user": {
+//        "email": "",
+//        "nickname": ""
+//    },
+//    "value": "!!!final: HHH",
+//    "range": {
+//        "columnEnd": 1,
+//        "columnStart": 1,
+//        "rowEnd": 16,
+//        "rowStart": 16
+//     }
+//  }
+
+function onEdit(e) {
+  Logger.log('ONEDIT: ' + JSON.stringify(e, false, '   '));
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Menu related functions --
+//
+
+//////////////////////////////
+//
+// recolorizeContents --  Colorize Humdrum data.  Currently only works
+//  on the first worksheet tab of the spreadsheet.
+//
+
+function recolorizeContents() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let allRange = sheet.getDataRange();
+  let data = allRange.getValues();
+  if (data.length == 0) {
+    return;
+  }
+  let firstcolumn = getFirstColumn(data);
+  if (firstcolumn > 0) {
+    for (let i = 0; i < data.length; i++) {
+      data[i] = data[i].splice(0, firstcolumn);
+    }
+  }
+  sheet.clearFormats();
+  allRange.clearFormat();
+  colorizeData(sheet, data);
+  allRange.setShowHyperlink(false);
+}
+
+
+
+//////////////////////////////
+//
+// getFirstColumn -- Return the first non-IGNORE column
+//     in the data array.
+//
+
+function getFirstColumn(data) {
+  let output = 0;
+  for (let i = 0; i < data[0].length; i++) {
+    if (data[0][i].match(/^\s*IGNORE\s*$/)) {
+      continue;
+    }
+    output = i;
+    break;
+  }
+  return output;
+}
+
+
+
+//////////////////////////////
+//
+// fixBarlineRows -- Add single quotes in front of equal signs in the
+// spreadsheet.
+//    Currently not dealing with IGNORE columns.   Currently only works on the
+//    first worksheet of the spreadsheet.  Checks the first column for lines
+//    that start with "=" or "'=" and then forces all contents on the line to be
+//    "'=".
+//
+
+function fixBarlineRows() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let allRange = sheet.getDataRange();
+  let formulas = allRange.getFormulas();
+  let data = allRange.getValues();
+  if (data.length == 0) {
+    return;
+  }
+  for (let i = 0; i < data.length; i++) {
+    if (formulas[i][0]) {
+      data[i][0] = formulas[i][0];
+    }
+    if (!data[i][0].match(/^'?=/)) {
+      continue;
+    }
+    for (let j = 0; j < data[i].length; j++) {
+      if (formulas[i][j]) {
+        data[i][j] = formulas[i][j];
+      }
+      if (data[i][j].match(/^=/)) {
+        data[i][j] = '\'' + data[i][j];
+      }
+    }
+  }
+  allRange.setValues(data);
+}
+
+
+
+//////////////////////////////
+//
+// addNullInterpretationLine --
+//
+
+function addNullInterpretationLine() {
+  addNullLine('*');
+}
+
+
+
+//////////////////////////////
+//
+// addNullCommentLine --
+//
+
+function addNullCommentLine() {
+  addNullLine('!');
+}
+
+
+
+//////////////////////////////
+//
+// addNullDataLine --
+//
+
+function addNullDataLine() {
+  addNullLine('.');
+}
+
+
+
+//////////////////////////////
+//
+// hideNonKernSpines --
+//
+
+function hideNonKernSpines() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let allRange = sheet.getDataRange();
+  let data = allRange.getValues();
+  let nonkernspines = getNonKernSpines(sheet, data);
+  let columnlist = getColumnIndexList(nonkernspines);
+  for (let i = 0; i < columnlist.length; i++) {
+    sheet.hideColumns(columnlist[i][0] + 1, columnlist[i][1]);
+  }
+}
+
+
+
+//////////////////////////////
+//
+// showAllSpines --
+//
+
+function showAllSpines() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let allRange = ss.getDataRange();
+  sheet.showColumns(1, sheet.getMaxColumns());
+}
+
+
+
+//////////////////////////////
+//
+// showOnlySelectedSpines --
+//
+
+function showOnlySelectedSpines() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let ranges = sheet.getActiveRangeList();
+  let allRange = sheet.getDataRange();
+  let data = allRange.getValues();
+  if (data.length < 1) {
+    return;
+  }
+  let spines =
+      convertRangesToSpineIndexes(sheet, ranges.getRanges(), data[0].length);
+  let notspines = reverseSpineSelection(spines, data[0].length);
+  let columnlist = getColumnIndexList(notspines);
+  for (let i = 0; i < columnlist.length; i++) {
+    sheet.hideColumns(columnlist[i][0] + 1, columnlist[i][1]);
+  }
+}
+
+
+
+//////////////////////////////
+//
+// hideSelectedSpines --
+//
+
+function hideSelectedSpines() {
+  let ss = SpreadsheetApp.getActive();
+  let sheet = ss.getActiveSheet();
+  let allRange = sheet.getDataRange();
+  let data = allRange.getValues();
+  if (data.length < 1) {
+    return;
+  }
+  let ranges = sheet.getActiveRangeList();
+  let spines =
+      convertRangesToSpineIndexes(sheet, ranges.getRanges(), data[0].length);
+  let columnlist = getColumnIndexList(spines);
+  for (let i = 0; i < columnlist.length; i++) {
+    sheet.hideColumns(columnlist[i][0] + 1, columnlist[i][1]);
+  }
+}
+
+
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // Support functions
 //
+
+//////////////////////////////
+//
+// reverseSpineSelection -- Give a list of column indexes, return
+//    the list of columns that are not in the list.
+//
+
+function reverseSpineSelection(spines, maxcol) {
+  let output = [];
+  let count = {};
+  for (let i = 0; i < spines.length; i++) {
+    count[spines[i]] = 1;
+  }
+  for (let i = 0; i < maxcol; i++) {
+    if (count[i]) {
+      continue;
+    }
+    output.push(i);
+  }
+  return output;
+}
+
+
+
+//////////////////////////////
+//
+// convertRangesToSpineIndexes -- Input a list of ranges and output
+//    a list of all columnns represented in the ranges.
+//
+
+function convertRangesToSpineIndexes(sheet, ranges, maxcol) {
+  let output = [];
+  let allRange = sheet.getDataRange();
+  let data = allRange.getValues();
+  let exinterp = getExinterpRowIndex(data);
+  if (exinterp < 0) {
+    return output;
+  }
+
+  for (let i = 0; i < ranges.length; i++) {
+    let starting = ranges[i].getColumn();
+    let ending = ranges[i].getLastColumn();
+    if (ending > maxcol) {
+      ending = maxcol;
+    }
+    for (let j = starting; j <= ending; j++) {
+      output.push(j - 1);
+    }
+    let k = output[output.length - 1] + 1;
+    while ((k < data[exinterp].length) && (data[exinterp][k] === '')) {
+      output.push(k++);
+    }
+  }
+  return output;
+}
+
+
+
+//////////////////////////////
+//
+// getColumnIndexList -- return a two-dimensional list of columns that
+//     list the starting column in the first element and the count
+//     of successive columns that follow in the second element.
+//
+
+function getColumnIndexList(inlist) {
+  let output = [];
+  let count;
+  for (let i = 0; i < inlist.length; i++) {
+    count = 1;
+    for (let j = i + 1; j < inlist.length; j++) {
+      if (inlist[j] == inlist[i] + 1) {
+        count++;
+      } else {
+        break;
+      }
+    }
+    let value = [inlist[i], count];
+    output.push(value);
+    i += count - 1;
+  }
+  return output;
+}
+
+
+
+//////////////////////////////
+//
+// getExinterpRowIndex -- Return the row index that contains the first exclusive
+//    interpratation; otherwise, return -1.
+//
+
+function getExinterpRowIndex(data) {
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0].match(/^\*\*/)) {
+      return i;
+      break;
+    }
+  }
+  return -1;
+}
+
+
+
+//////////////////////////////
+//
+// getNonKernSpines --  Return the list of colums that do not
+//    have **kern in them.  If there one or more columns after a **kern
+//    that are blank, then are considered **kern spines (due to
+//    expanded tab possibility).
+//
+
+function getNonKernSpines(sheet, data) {
+  let output = [];
+  let exinterp = getExinterpRowIndex(data);
+  if (exinterp < 0) {
+    return output;
+  }
+  let lastinterp = '';
+  for (let i = 0; i < data[exinterp].length; i++) {
+    if (data[exinterp][i] === '**kern') {
+      lastinterp = '**kern';
+      continue;
+    }
+    if ((lastinterp === '**kern') && (data[exinterp][i] === '')) {
+      continue;
+    }
+    output.push(i);
+  }
+  return output;
+}
+
+
 
 //////////////////////////////
 //
